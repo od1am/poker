@@ -8,6 +8,31 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::collections::HashMap;
 use std::io::{self};
+use colored::*;
+use bevy::prelude::*;
+
+mod bevy_renderer;
+
+const FIRST_NAMES: &[&str] = &[
+    "Alex", "Blake", "Charlie", "Drew", "Eden",
+    "Frankie", "Gray", "Harper", "Indigo", "Jordan",
+    "Kennedy", "Logan", "Morgan", "Noah", "Parker",
+    "Quinn", "Riley", "Sage", "Taylor", "Val"
+];
+
+const LAST_NAMES: &[&str] = &[
+    "Smith", "Johnson", "Williams", "Brown", "Jones",
+    "Garcia", "Miller", "Davis", "Rodriguez", "Martinez",
+    "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson",
+    "Thomas", "Taylor", "Moore", "Jackson", "Martin"
+];
+
+fn generate_random_name() -> String {
+    let mut rng = rand::thread_rng();
+    let first = FIRST_NAMES.choose(&mut rng).unwrap();
+    let last = LAST_NAMES.choose(&mut rng).unwrap();
+    format!("{} {}", first, last)
+}
 
 //------------------------------------------------------------------------------
 // Core Game Types
@@ -90,6 +115,7 @@ enum BettingRound {
 
 /// Decision made by an AI player, including the action and confidence level
 #[derive(Debug)]
+#[allow(dead_code)]
 struct AIDecision {
     action: Action,
     confidence: f32,
@@ -351,6 +377,7 @@ impl Game {
     }
 
     /// Resets the game state for a new hand
+    #[allow(dead_code)]
     fn reset_for_new_hand(&mut self) {
         self.deck = Deck::new();
         self.deck.shuffle();
@@ -506,18 +533,20 @@ impl Game {
 
     /// Gets the action from a human player
     fn get_human_action(&self, player: &Player) -> Action {
-        println!("\n{}'s turn:", player.name);
-        println!("Your hand:");
+        println!("\n{}'s turn:", player.name.bright_green().bold());
+        println!("{}", "Your hand:".cyan());
         for card in &player.hand {
-            println!("{:?} of {:?}", card.rank, card.suit);
+            println!("  {} of {}", 
+                format!("{:?}", card.rank).bright_white(),
+                format!("{:?}", card.suit).bright_red());
         }
-        println!("Current bet is: ${}", self.current_bet);
-        println!("Your chips: ${}", player.chips);
-        println!("Your current bet: ${}", player.current_bet);
-        println!("Pot: ${}", self.pot);
+        println!("Current bet is: {}", format!("${}", self.current_bet).bright_yellow());
+        println!("Your chips: {}", format!("${}", player.chips).bright_yellow());
+        println!("Your current bet: {}", format!("${}", player.current_bet).bright_yellow());
+        println!("Pot: {}", format!("${}", self.pot).bright_yellow());
 
         loop {
-            println!("Choose an action: (F)old, (C)all, (R)aise");
+            println!("\n{}", "Choose an action: (F)old, (C)all, (R)aise".bright_cyan());
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
 
@@ -525,7 +554,7 @@ impl Game {
                 Some('f') => return Action::Fold,
                 Some('c') => return Action::Call,
                 Some('r') => {
-                    println!("Enter raise amount:");
+                    println!("{}", "Enter raise amount:".bright_cyan());
                     let mut amount_str = String::new();
                     io::stdin().read_line(&mut amount_str).unwrap();
                     if let Ok(amount) = amount_str.trim().parse::<u32>() {
@@ -533,9 +562,9 @@ impl Game {
                             return Action::Raise(amount);
                         }
                     }
-                    println!("Invalid amount. You have ${} chips.", player.chips);
+                    println!("{}", format!("Invalid amount. You have ${} chips.", player.chips).bright_red());
                 }
-                _ => println!("Invalid action."),
+                _ => println!("{}", "Invalid action.".bright_red()),
             }
         }
     }
@@ -604,6 +633,59 @@ impl Game {
             println!("\n{} wins the pot of {} chips!", winner_name, self.pot);
         } else {
             println!("\nNo winner.");
+        }
+    }
+
+    /// Posts the small and big blinds for the current hand
+    fn post_blinds(&mut self) {
+        let num_players = self.players.len();
+        
+        // Small blind position is one after dealer
+        let sb_pos = (self.dealer_position + 1) % num_players;
+        // Big blind position is two after dealer
+        let bb_pos = (self.dealer_position + 2) % num_players;
+        
+        // Post small blind (10)
+        self.players[sb_pos].chips -= 10;
+        self.players[sb_pos].current_bet = 10;
+        self.pot += 10;
+        println!("{} posts small blind: {}", 
+            self.players[sb_pos].name.bright_blue(),
+            "$10".bright_yellow());
+        
+        // Post big blind (20)
+        self.players[bb_pos].chips -= 20;
+        self.players[bb_pos].current_bet = 20;
+        self.pot += 20;
+        println!("{} posts big blind: {}", 
+            self.players[bb_pos].name.bright_blue(),
+            "$20".bright_yellow());
+        
+        // Set current bet to big blind amount
+        self.current_bet = 20;
+    }
+
+    /// Deals two hole cards to each player
+    fn deal_hole_cards(&mut self) {
+        // Deal two cards to each player
+        for _ in 0..2 {
+            for player in &mut self.players {
+                if let Some(card) = self.deck.deal() {
+                    player.hand.push(card);
+                }
+            }
+        }
+        
+        // Print each player's hand (only show for human players)
+        for player in &self.players {
+            if player.ai.is_none() {
+                println!("\n{}'s hand:", player.name.bright_green().bold());
+                for card in &player.hand {
+                    println!("  {} of {}", 
+                        format!("{:?}", card.rank).bright_white(),
+                        format!("{:?}", card.suit).bright_red());
+                }
+            }
         }
     }
 }
@@ -828,64 +910,21 @@ fn check_one_pair(rank_counts: &HashMap<Rank, u32>, cards: &[Card]) -> Option<(R
 }
 
 fn main() {
-    let players_config = vec![
-        ("You".to_string(), false),
-        ("AI Bob".to_string(), true),
-        ("AI Charlie".to_string(), true),
-        ("AI Dave".to_string(), true),
-    ];
+    let mut app = App::new();
     
-    let mut game = Game::new(players_config);
+    // Add default Bevy plugins
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Rust Poker 3D".into(),
+            resolution: (1280., 720.).into(),
+            ..default()
+        }),
+        ..default()
+    }));
 
-    println!("\nWelcome to Rust Poker!");
-    println!("You start with $1000 chips. Good luck!");
-    println!("Blinds are $10/$20\n");
+    // Add our poker game plugin
+    app.add_plugins(bevy_renderer::PokerGamePlugin);
 
-    // Post blinds and deal cards
-    game.post_blinds();
-    game.deal_hole_cards();
-
-    println!("\n-- Pre-Flop Betting Round --");
-    game.betting_round();
-
-    // Only continue if more than one player is still in
-    if game.players.iter().filter(|p| !p.folded).count() > 1 {
-    game.deal_flop();
-    println!("\nCommunity cards after the flop:");
-    for card in &game.community_cards {
-        println!("{:?} of {:?}", card.rank, card.suit);
-    }
-    println!("\n-- Post-Flop Betting Round --");
-    game.betting_round();
-
-        if game.players.iter().filter(|p| !p.folded).count() > 1 {
-    game.deal_turn();
-    println!("\nCommunity cards after the turn:");
-    for card in &game.community_cards {
-        println!("{:?} of {:?}", card.rank, card.suit);
-    }
-    println!("\n-- Post-Turn Betting Round --");
-    game.betting_round();
-
-            if game.players.iter().filter(|p| !p.folded).count() > 1 {
-    game.deal_river();
-    println!("\nCommunity cards after the river:");
-    for card in &game.community_cards {
-        println!("{:?} of {:?}", card.rank, card.suit);
-    }
-    println!("\n-- Final Betting Round --");
-    game.betting_round();
-            }
-        }
-    }
-
-    // Show showdown only if more than one player remains
-    if game.players.iter().filter(|p| !p.folded).count() > 1 {
-    game.showdown();
-    } else {
-        // Find the winner (the only non-folded player)
-        if let Some(winner) = game.players.iter().find(|p| !p.folded) {
-            println!("\n{} wins the pot of ${} chips!", winner.name, game.pot);
-        }
-    }
+    // Run the app
+    app.run();
 }
